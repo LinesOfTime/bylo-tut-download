@@ -39,7 +39,7 @@ Android-приложение для поиска ближайших истори
 ## Открыть в браузере
 
 Универсальная web/PWA-версия доступна по адресу:
-[https://klinnmy-ui.github.io/bylo-tut-download/](https://klinnmy-ui.github.io/bylo-tut-download/).
+[https://linesoftime.github.io/bylo-tut-download/](https://linesoftime.github.io/bylo-tut-download/).
 
 Она запускается на Android, iPhone и ПК без установки APK. Для камеры и текущей
 геопозиции браузер запросит отдельное разрешение. Выбранная фотография читается
