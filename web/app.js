@@ -1,7 +1,22 @@
 const API_URL = "https://api.pastvu.com/api2";
 const DEFAULT_POINT = [55.7558, 37.6173];
 const INITIAL_RESULT_COUNT = 12;
-const state = { point: null, photoUrl: null, stream: null, results: [], visibleResultCount: INITIAL_RESULT_COUNT, selectedResult: null, pickerMarker: null, resultMarkers: [] };
+const state = {
+  point: null,
+  photoUrl: null,
+  stream: null,
+  results: [],
+  visibleResultCount: INITIAL_RESULT_COUNT,
+  selectedResult: null,
+  pickerMarker: null,
+  resultMarkers: [],
+  markerCycles: new Map(),
+  inputGeneration: 0,
+  locationGeneration: 0,
+  searchGeneration: 0,
+  searchController: null,
+  resultsMapFitted: false
+};
 
 const $ = (id) => document.getElementById(id);
 const latitude = $("latitude");
@@ -15,10 +30,6 @@ const resultsMap = L.map("results-map", { zoomControl: false }).setView(DEFAULT_
   map.attributionControl.setPrefix(false);
 });
 const MAP_TILE_SOURCES = [
-  {
-    url: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-    options: { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }
-  },
   {
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     options: { maxZoom: 19, attribution: "© OpenStreetMap contributors" }
@@ -100,12 +111,59 @@ function setMessage(text, error = false) {
   message.classList.toggle("error", error);
 }
 
+function clearComparison() {
+  const comparison = $("comparison");
+  comparison.hidden = true;
+  comparison.replaceChildren();
+  document.querySelector(".results-panel").classList.remove("has-comparison");
+}
+
+function clearResults() {
+  state.searchGeneration += 1;
+  state.searchController?.abort();
+  state.searchController = null;
+  searchButton.disabled = false;
+  state.results = [];
+  state.visibleResultCount = INITIAL_RESULT_COUNT;
+  state.selectedResult = null;
+  state.resultBounds = [];
+  state.resultsMapFitted = false;
+  state.markerCycles.clear();
+  state.resultMarkers.forEach(marker => marker.remove());
+  state.resultMarkers = [];
+  clearComparison();
+  updateHistoricalReference();
+  $("results-list").innerHTML = '<div class="empty-state"><div><b>Исторические фотографии появятся здесь</b><span>Уточните точку и запустите новый поиск PastVu</span></div></div>';
+}
+
+function clearPoint(status, { clearInputs = false } = {}) {
+  state.point = null;
+  if (clearInputs) {
+    latitude.value = "";
+    longitude.value = "";
+  }
+  $("point-status").textContent = status;
+  if (state.pickerMarker) {
+    state.pickerMarker.remove();
+    state.pickerMarker = null;
+  }
+  clearResults();
+}
+
+function clearPhoto() {
+  if (state.photoUrl?.startsWith("blob:")) URL.revokeObjectURL(state.photoUrl);
+  state.photoUrl = null;
+  $("photo-preview").removeAttribute("src");
+  document.body.classList.remove("has-media");
+}
+
 function setPoint(lat, lon, source = "Точка установлена") {
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-    state.point = null;
-    $("point-status").textContent = "Некорректные координаты";
+    clearPoint("Некорректные координаты");
     return false;
   }
+  const changed = !state.point || Math.abs(state.point.lat - lat) > 1e-9 || Math.abs(state.point.lon - lon) > 1e-9;
+  if (changed) clearResults();
   state.point = { lat, lon };
   latitude.value = lat.toFixed(6);
   longitude.value = lon.toFixed(6);
@@ -117,12 +175,26 @@ function setPoint(lat, lon, source = "Точка установлена") {
 }
 
 function pointFromInputs() {
-  return setPoint(Number(latitude.value.replace(",", ".")), Number(longitude.value.replace(",", ".")), "Введённые координаты");
+  const latText = latitude.value.trim().replace(",", ".");
+  const lonText = longitude.value.trim().replace(",", ".");
+  if (!latText || !lonText) {
+    clearPoint("Укажите широту и долготу");
+    return false;
+  }
+  return setPoint(Number(latText), Number(lonText), "Введённые координаты");
 }
 
-pickerMap.on("click", event => setPoint(event.latlng.lat, event.latlng.lng, "Выбрано на карте"));
-latitude.addEventListener("change", pointFromInputs);
-longitude.addEventListener("change", pointFromInputs);
+pickerMap.on("click", event => {
+  state.inputGeneration += 1;
+  state.locationGeneration += 1;
+  setPoint(event.latlng.lat, event.latlng.lng, "Выбрано на карте");
+});
+[latitude, longitude].forEach(input => input.addEventListener("change", () => {
+  state.inputGeneration += 1;
+  state.locationGeneration += 1;
+  pointFromInputs();
+}));
+document.querySelectorAll('input[name="radius"]').forEach(input => input.addEventListener("change", clearResults));
 
 function activateMode(button) {
   document.querySelectorAll(".mode-card").forEach(item => item.classList.toggle("active", item === button));
@@ -132,50 +204,66 @@ $("gallery-button").addEventListener("click", () => $("photo-input").click());
 $("photo-input").addEventListener("change", async event => {
   const file = event.target.files?.[0];
   if (!file) return;
+  const generation = ++state.inputGeneration;
+  state.locationGeneration += 1;
   stopCamera();
   activateMode($("gallery-button"));
-  if (state.photoUrl) URL.revokeObjectURL(state.photoUrl);
+  clearPoint("Читаем координаты фотографии…", { clearInputs: true });
+  clearPhoto();
   state.photoUrl = URL.createObjectURL(file);
   showPhoto(state.photoUrl);
   resetWorkspaceScroll();
   setMessage("Читаем координаты фотографии на устройстве…");
   try {
     const gps = await exifr.gps(file);
+    if (generation !== state.inputGeneration) return;
     if (gps?.latitude != null && gps?.longitude != null) {
       setPoint(gps.latitude, gps.longitude, "Координаты из фото");
       setMessage("Координаты извлечены из фотографии. Сам файл никуда не отправлен.");
     } else setMessage("В фото нет доступных координат — укажите точку вручную или на карте.", true);
   } catch {
+    if (generation !== state.inputGeneration) return;
     setMessage("Не удалось прочитать EXIF — укажите точку вручную или на карте.", true);
   }
 });
 
 $("location-button").addEventListener("click", () => {
+  state.inputGeneration += 1;
   activateMode($("location-button"));
   stopCamera();
+  clearPhoto();
+  clearPoint("Определяем текущую позицию…", { clearInputs: true });
   $("media-stage").hidden = true;
   requestCurrentPosition();
 });
 
 function requestCurrentPosition(fromCamera = false) {
   if (!navigator.geolocation) return setMessage("Этот браузер не поддерживает геопозицию.", true);
+  const generation = ++state.locationGeneration;
   setMessage(fromCamera ? "Камера включена. Определяем текущую позицию…" : "Определяем текущую позицию…");
   navigator.geolocation.getCurrentPosition(
     position => {
+      if (generation !== state.locationGeneration) return;
       setPoint(position.coords.latitude, position.coords.longitude, "Текущая позиция");
       setMessage(fromCamera
         ? `Камера и позиция готовы, точность около ${Math.round(position.coords.accuracy)} м.`
         : `Позиция определена с точностью около ${Math.round(position.coords.accuracy)} м.`);
     },
-    () => setMessage("Не удалось определить позицию. Проверьте разрешение браузера и включение геолокации.", true),
+    () => {
+      if (generation === state.locationGeneration) setMessage("Не удалось определить позицию. Проверьте разрешение браузера и включение геолокации.", true);
+    },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
   );
 }
 
 $("camera-button").addEventListener("click", async () => {
+  const preserveComparison = Boolean(state.selectedResult);
+  state.inputGeneration += 1;
+  state.locationGeneration += 1;
   activateMode($("camera-button"));
   try {
     stopCamera();
+    clearPhoto();
     state.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
     $("media-stage").hidden = false;
     $("media-stage").classList.remove("photo-mode");
@@ -185,10 +273,12 @@ $("camera-button").addEventListener("click", async () => {
     $("capture-button").hidden = false;
     $("camera-preview").srcObject = state.stream;
     updateHistoricalReference();
-    if (!state.point) requestCurrentPosition(true);
-    else setMessage(state.selectedResult
-      ? "Камера включена. Подберите ракурс рядом с выбранным историческим фото."
-      : "Камера включена. После поиска выберите историческое фото для сопоставления.");
+    if (preserveComparison) {
+      setMessage("Камера включена. Подберите ракурс рядом с выбранным историческим фото.");
+    } else {
+      clearPoint("Определяем текущую позицию…", { clearInputs: true });
+      requestCurrentPosition(true);
+    }
   } catch {
     setMessage("Камера недоступна. Проверьте разрешение браузера и подключение по HTTPS.", true);
   }
@@ -200,6 +290,7 @@ $("capture-button").addEventListener("click", () => {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   canvas.getContext("2d").drawImage(video, 0, 0);
+  clearPhoto();
   state.photoUrl = canvas.toDataURL("image/jpeg", 0.92);
   stopCamera();
   showPhoto(state.photoUrl);
@@ -246,7 +337,14 @@ function stopCamera() {
 
 searchButton.addEventListener("click", async () => {
   if (!pointFromInputs()) return setMessage("Укажите корректные широту и долготу.", true);
+  state.searchController?.abort();
+  const controller = new AbortController();
+  const generation = ++state.searchGeneration;
+  state.searchController = controller;
   state.selectedResult = null;
+  state.results = [];
+  state.markerCycles.clear();
+  state.resultsMapFitted = false;
   state.visibleResultCount = INITIAL_RESULT_COUNT;
   updateHistoricalReference();
   const radius = Number(document.querySelector('input[name="radius"]:checked').value);
@@ -255,16 +353,24 @@ searchButton.addEventListener("click", async () => {
   searchButton.disabled = true;
   setMessage("Ищем фотографии PastVu…");
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
+    if (generation !== state.searchGeneration) return;
     state.results = parseResults(payload);
     renderResults();
     setMessage(state.results.length ? `Найдено фотографий: ${state.results.length}.` : "В выбранном радиусе фотографии не найдены.");
   } catch (error) {
+    if (error.name === "AbortError" || generation !== state.searchGeneration) return;
+    state.results = [];
+    state.selectedResult = null;
+    renderResults();
     setMessage(`Поиск не выполнен: ${error.message}`, true);
   } finally {
-    searchButton.disabled = false;
+    if (generation === state.searchGeneration) {
+      state.searchController = null;
+      searchButton.disabled = false;
+    }
   }
 });
 
@@ -289,12 +395,9 @@ function parseResults(payload) {
   });
 }
 
-function renderResults() {
+function renderResults({ fitMap = true } = {}) {
   const list = $("results-list");
-  const comparison = $("comparison");
-  comparison.hidden = true;
-  comparison.replaceChildren();
-  document.querySelector(".results-panel").classList.remove("has-comparison");
+  if (!state.selectedResult) clearComparison();
   list.replaceChildren();
   if (!state.results.length) list.innerHTML = '<div class="empty-state">В выбранном радиусе фотографии не найдены.</div>';
   const bounds = state.results
@@ -323,14 +426,14 @@ function renderResults() {
     more.textContent = `Показать ещё (${state.results.length - state.visibleResultCount})`;
     more.addEventListener("click", () => {
       state.visibleResultCount = Math.min(state.results.length, state.visibleResultCount + INITIAL_RESULT_COUNT);
-      renderResults();
+      renderResults({ fitMap: false });
     });
     list.append(more);
   }
   renderResultMarkers();
   if (state.point) bounds.push([state.point.lat, state.point.lon]);
   state.resultBounds = bounds;
-  fitResultsMap();
+  if (fitMap) fitResultsMap();
 }
 
 function renderResultMarkers() {
@@ -343,7 +446,7 @@ function renderResultMarkers() {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ photo, index });
   });
-  groups.forEach(items => {
+  groups.forEach((items, key) => {
     const selectedIndex = items.findIndex(item => item.photo === state.selectedResult);
     const active = selectedIndex >= 0 ? items[selectedIndex] : null;
     const rotation = directionDegrees(active?.photo.direction ?? items[0].photo.direction);
@@ -357,10 +460,13 @@ function renderResultMarkers() {
     });
     const marker = L.marker([items[0].photo.lat, items[0].photo.lon], { icon }).addTo(resultsMap);
     marker.bindTooltip(items.length > 1 ? `${items.length} фото в этой точке` : escapeHtml(items[0].photo.title));
-    let nextIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    let nextIndex = state.markerCycles.get(key);
+    if (!Number.isInteger(nextIndex)) nextIndex = selectedIndex >= 0 ? (selectedIndex + 1) % items.length : 0;
     marker.on("click", () => {
-      selectResult(items[nextIndex].index);
+      const selected = nextIndex;
       nextIndex = (nextIndex + 1) % items.length;
+      state.markerCycles.set(key, nextIndex);
+      selectResult(items[selected].index);
     });
     state.resultMarkers.push(marker);
   });
@@ -370,6 +476,7 @@ function fitResultsMap() {
   resultsMap.invalidateSize(false);
   if (state.resultBounds?.length) resultsMap.fitBounds(state.resultBounds, { padding: [30, 30], maxZoom: 17 });
   else if (state.point) resultsMap.setView([state.point.lat, state.point.lon], 16);
+  state.resultsMapFitted = true;
 }
 
 function selectResult(index) {
@@ -423,7 +530,10 @@ document.querySelectorAll(".view-switch button").forEach(button => button.addEve
   document.querySelector(".results-panel").classList.toggle("map-mode", mapMode);
   $("results-list").hidden = mapMode;
   $("results-map-pane").hidden = !mapMode;
-  if (mapMode) setTimeout(fitResultsMap, 0);
+  if (mapMode) setTimeout(() => {
+    resultsMap.invalidateSize(false);
+    if (!state.resultsMapFitted) fitResultsMap();
+  }, 0);
 }));
 
 function escapeHtml(value) {
