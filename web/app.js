@@ -10,7 +10,6 @@ const state = {
   selectedResult: null,
   pickerMarker: null,
   resultMarkers: [],
-  markerCycles: new Map(),
   inputGeneration: 0,
   locationGeneration: 0,
   searchGeneration: 0,
@@ -128,7 +127,7 @@ function clearResults() {
   state.selectedResult = null;
   state.resultBounds = [];
   state.resultsMapFitted = false;
-  state.markerCycles.clear();
+  $("map-group-dialog").close();
   state.resultMarkers.forEach(marker => marker.remove());
   state.resultMarkers = [];
   clearComparison();
@@ -343,7 +342,7 @@ searchButton.addEventListener("click", async () => {
   state.searchController = controller;
   state.selectedResult = null;
   state.results = [];
-  state.markerCycles.clear();
+  $("map-group-dialog").close();
   state.resultsMapFitted = false;
   state.visibleResultCount = INITIAL_RESULT_COUNT;
   updateHistoricalReference();
@@ -439,38 +438,61 @@ function renderResults({ fitMap = true } = {}) {
 function renderResultMarkers() {
   state.resultMarkers.forEach(marker => marker.remove());
   state.resultMarkers = [];
-  const groups = new Map();
-  state.results.forEach((photo, index) => {
-    if (!Number.isFinite(photo.lat) || !Number.isFinite(photo.lon)) return;
-    const key = `${photo.lat.toFixed(5)}:${photo.lon.toFixed(5)}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ photo, index });
-  });
-  groups.forEach((items, key) => {
+  const candidates = state.results.map((photo, index) => ({ photo, index }))
+    .filter(({ photo }) => Number.isFinite(photo.lat) && Number.isFinite(photo.lon));
+  const pixels = candidates.map(({ photo }) => resultsMap.latLngToContainerPoint([photo.lat, photo.lon]));
+  groupMapPoints(pixels.map(point => [point.x, point.y]), 48).forEach(indices => {
+    const items = indices.map(index => candidates[index]);
+    const center = resultsMap.containerPointToLatLng([
+      indices.reduce((sum, index) => sum + pixels[index].x, 0) / indices.length,
+      indices.reduce((sum, index) => sum + pixels[index].y, 0) / indices.length
+    ]);
     const selectedIndex = items.findIndex(item => item.photo === state.selectedResult);
     const active = selectedIndex >= 0 ? items[selectedIndex] : null;
     const rotation = directionDegrees(active?.photo.direction ?? items[0].photo.direction);
-    const markerBody = active || items.length === 1
-      ? `<span style="transform:rotate(${rotation}deg)">↑</span>`
-      : `<b>${items.length}</b>`;
+    const markerBody = items.length > 1 ? `<b>${items.length}</b>`
+      : items[0].photo.direction ? `<span style="transform:rotate(${rotation}deg)">↑</span>` : "•";
     const icon = L.divIcon({
       className: "",
-      html: `<div class="pastvu-marker${active ? " selected" : ""}" title="${items.length > 1 ? `${items.length} фото в этой точке` : escapeHtml(items[0].photo.title)}">${markerBody}</div>`,
+      html: `<div class="pastvu-marker${active ? " selected" : ""}" title="${items.length > 1 ? `${items.length} фото рядом` : escapeHtml(items[0].photo.title)}">${markerBody}</div>`,
       iconSize: [32, 32], iconAnchor: [16, 16]
     });
-    const marker = L.marker([items[0].photo.lat, items[0].photo.lon], { icon }).addTo(resultsMap);
-    marker.bindTooltip(items.length > 1 ? `${items.length} фото в этой точке` : escapeHtml(items[0].photo.title));
-    let nextIndex = state.markerCycles.get(key);
-    if (!Number.isInteger(nextIndex)) nextIndex = selectedIndex >= 0 ? (selectedIndex + 1) % items.length : 0;
+    const marker = L.marker(center, { icon }).addTo(resultsMap);
+    marker.bindTooltip(items.length > 1 ? `${items.length} фото рядом` : escapeHtml(items[0].photo.title));
     marker.on("click", () => {
-      const selected = nextIndex;
-      nextIndex = (nextIndex + 1) % items.length;
-      state.markerCycles.set(key, nextIndex);
-      selectResult(items[selected].index);
+      if (items.length === 1) selectResult(items[0].index);
+      else openMapGroup(items, center);
     });
     state.resultMarkers.push(marker);
   });
 }
+
+resultsMap.on("zoomend moveend resize", renderResultMarkers);
+
+function openMapGroup(items, center) {
+  const dialog = $("map-group-dialog");
+  $("map-group-title").textContent = `Фотографии рядом: ${items.length}`;
+  const list = $("map-group-list");
+  list.replaceChildren();
+  items.forEach(({ photo, index }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "map-group-item";
+    const title = document.createElement("strong");
+    title.textContent = photo.title;
+    const details = document.createElement("small");
+    details.textContent = [photo.year, photo.direction ? `направление ${directionLabelRu(photo.direction)}` : null, "Источник: PastVu"].filter(Boolean).join(" · ");
+    button.append(title, details);
+    button.onclick = () => { dialog.close(); selectResult(index); };
+    list.append(button);
+  });
+  $("map-group-zoom").onclick = () => {
+    dialog.close();
+    resultsMap.setView(center, Math.min(resultsMap.getMaxZoom(), resultsMap.getZoom() + 1.5));
+  };
+  dialog.showModal();
+}
+$("map-group-close").onclick = () => $("map-group-dialog").close();
 
 function fitResultsMap() {
   resultsMap.invalidateSize(false);

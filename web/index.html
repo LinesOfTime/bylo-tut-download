@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=18">
+  <link rel="stylesheet" href="styles.css?v=20">
   <title>Было Тут | Линии времени</title>
 </head>
 <body>
@@ -116,6 +116,15 @@
 
   <script src="vendor/exifr.full.umd.js"></script>
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script src="app.js?v=21" defer></script>
+  <dialog id="map-group-dialog" class="map-group-dialog" aria-labelledby="map-group-title">
+    <h2 id="map-group-title"></h2>
+    <div id="map-group-list" class="map-group-list"></div>
+    <div class="map-group-actions">
+      <button id="map-group-close" type="button">Закрыть</button>
+      <button id="map-group-zoom" type="button">Приблизить карту</button>
+    </div>
+  </dialog>
+  <script src="map-groups.js?v=1"></script>
+  <script src="app.js?v=22" defer></script>
 </body>
 </html>
