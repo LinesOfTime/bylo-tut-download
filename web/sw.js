@@ -1,6 +1,6 @@
-const CACHE = "bylo-tut-web-v33";
+const CACHE = "bylo-tut-web-v34";
 const SHELL = [
-  "./", "index.html", "legal.html", "styles.css?v=20", "map-groups.js?v=1", "app.js?v=22", "manifest.webmanifest", "icons/icon.svg",
+  "./", "index.html", "legal.html", "styles.css?v=20", "map-groups.js?v=2", "app.js?v=23", "manifest.webmanifest", "icons/icon.svg",
   "vendor/exifr.full.umd.js", "vendor/leaflet/leaflet.css", "vendor/leaflet/leaflet.js",
   "vendor/leaflet/images/marker-icon.png", "vendor/leaflet/images/marker-icon-2x.png",
   "vendor/leaflet/images/marker-shadow.png"

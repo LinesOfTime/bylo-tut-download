@@ -1,5 +1,6 @@
 /** Groups projected screen points; preserves every input index. */
-function groupMapPoints(points, radiusPixels = 48) {
+const MAP_GROUP_RADIUS = 36;
+function groupMapPoints(points, radiusPixels = MAP_GROUP_RADIUS) {
   if (!Number.isFinite(radiusPixels) || radiusPixels <= 0) throw new RangeError("Invalid grouping radius");
   const parents = points.map((_, i) => i);
   const root = i => { while (parents[i] !== i) i = parents[i]; return i; };

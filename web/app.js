@@ -441,7 +441,7 @@ function renderResultMarkers() {
   const candidates = state.results.map((photo, index) => ({ photo, index }))
     .filter(({ photo }) => Number.isFinite(photo.lat) && Number.isFinite(photo.lon));
   const pixels = candidates.map(({ photo }) => resultsMap.latLngToContainerPoint([photo.lat, photo.lon]));
-  groupMapPoints(pixels.map(point => [point.x, point.y]), 48).forEach(indices => {
+  groupMapPoints(pixels.map(point => [point.x, point.y]), MAP_GROUP_RADIUS).forEach(indices => {
     const items = indices.map(index => candidates[index]);
     const center = resultsMap.containerPointToLatLng([
       indices.reduce((sum, index) => sum + pixels[index].x, 0) / indices.length,
